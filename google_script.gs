@@ -1,6 +1,6 @@
 // ============================================================
 //  IV Care Report — Google Apps Script
-//  ACWA Power · Ar Rass 2
+//  ACWA · Ar Rass 2
 //  → Summary sheet + individual sheet per module
 //  → Each module sheet: full data table + IV curve chart
 // ============================================================
