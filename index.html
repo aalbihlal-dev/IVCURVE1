@@ -263,7 +263,7 @@
     <div class="logo-mark">⚡</div>
     <div>
       <div class="logo-name">IV Report</div>
-      <div class="logo-sub">AR RASS 2 · ACWA POWER</div>
+      <div class="logo-sub">AR RASS 2 · ACWA </div>
     </div>
   </div>
   <div class="hdr-btns">
@@ -783,7 +783,7 @@ async function extractWithAI() {
       }
     }));
 
-    const prompt = `You are an expert solar PV engineer. Analyze these IV care test photos from ACWA Power Ar Rass 2 solar project.
+    const prompt = `You are an expert solar PV engineer. Analyze these IV care test photos from ACWA Ar Rass 2 solar project.
 
 Photos may include any mix of:
 - Serial number barcode label (may be upside-down or mirrored — read it anyway, flip mentally)
@@ -1223,35 +1223,28 @@ function openSettings() {
 
 function unlockSettings() {
   const pwd = document.getElementById('s_pwd').value;
-  // Try to decode with entered password and check if result looks valid
-  // We verify by checking the decoded API key starts with known prefix
-  // or matches stored override — uses a simple hash check
-  const h = simpleHash(pwd);
-  if (h !== _pwdHash()) {
+
+  // Verify password by decoding a known token
+  // _EV encodes "IV_OK" with the correct password
+  const _EV = [112, 100, 102, 125, 114];
+  const check = _decode(_EV, pwd);
+
+  if (check !== 'IV_OK') {
     document.getElementById('s_pwd_err').style.display = 'block';
     document.getElementById('s_pwd').value = '';
     document.getElementById('s_pwd').focus();
     return;
   }
-  // Decode keys with correct password
-  _unlockedKey   = _getKey()   || _decode(_EK, pwd);
-  _unlockedSheet = _getSheet() || _decode(_ES, pwd);
+
+  // Password correct — decode and show keys
+  _unlockedKey   = localStorage.getItem('iv_api_key')   || _decode(_EK, pwd);
+  _unlockedSheet = localStorage.getItem('iv_sheet_url') || _decode(_ES, pwd);
 
   document.getElementById('s_key').value   = _unlockedKey;
   document.getElementById('s_sheet').value = _unlockedSheet;
+  document.getElementById('s_pwd_err').style.display    = 'none';
   document.getElementById('settingsLocked').style.display   = 'none';
   document.getElementById('settingsUnlocked').style.display = 'block';
-}
-
-// Simple hash to verify password without storing it plaintext
-// Hash of "1241" — change this if you change the password
-function _pwdHash() { return 1747954; }
-function simpleHash(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = Math.imul(31, h) + str.charCodeAt(i) | 0;
-  }
-  return Math.abs(h);
 }
 
 function closeSettings() {
