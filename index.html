@@ -861,32 +861,99 @@ function switchTest(n, el) {
 }
 
 // ═══════════════════════════════════════════════
-//  PHOTOS — two batches
+//  PHOTOS — two batches with auto-rotation
 // ═══════════════════════════════════════════════
-function addPhotos(input, batch) {
+
+// Reads EXIF orientation and returns corrected canvas dataURL
+function fixOrientation(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const view = new DataView(e.target.result);
+      // Check JPEG
+      if (view.getUint16(0, false) !== 0xFFD8) { resolve(null); return; }
+      let offset = 2, orientation = 1;
+      while (offset < view.byteLength) {
+        const marker = view.getUint16(offset, false);
+        offset += 2;
+        if (marker === 0xFFE1) {
+          if (view.getUint32(offset += 2, false) !== 0x45786966) break;
+          const little = view.getUint16(offset += 6, false) === 0x4949;
+          offset += view.getUint32(offset + 4, little);
+          const tags = view.getUint16(offset, little);
+          offset += 2;
+          for (let i = 0; i < tags; i++) {
+            if (view.getUint16(offset + (i * 12), little) === 0x0112) {
+              orientation = view.getUint16(offset + (i * 12) + 8, little);
+              break;
+            }
+          }
+          break;
+        } else if ((marker & 0xFF00) !== 0xFF00) break;
+        else offset += view.getUint16(offset, false);
+      }
+      resolve(orientation);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function rotateCanvas(img, deg) {
+  const rad = deg * Math.PI / 180;
+  const w = deg === 90 || deg === 270 ? img.height : img.width;
+  const h = deg === 90 || deg === 270 ? img.width : img.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate(rad);
+  ctx.drawImage(img, -img.width / 2, -img.height / 2);
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+
+async function loadAndCorrectImage(file) {
+  const orientation = await fixOrientation(file);
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        // Fix EXIF orientation
+        let deg = 0;
+        if (orientation === 3) deg = 180;
+        else if (orientation === 6) deg = 90;
+        else if (orientation === 8) deg = 270;
+
+        if (deg === 0) {
+          resolve(e.target.result);
+        } else {
+          resolve(rotateCanvas(img, deg));
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addPhotos(input, batch) {
   const grid = document.getElementById('photoGrid' + batch);
   const store = batch === 1 ? pendingPhotos1 : pendingPhotos2;
   const thumbClass = 'photo-thumb photo-thumb-' + batch;
 
-  Array.from(input.files).forEach(file => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const dataUrl = e.target.result;
-      store.push({ name: file.name, dataUrl, type: file.type, batch });
-      const img = document.createElement('img');
-      img.src = dataUrl;
-      img.className = thumbClass;
-      grid.appendChild(img);
-    };
-    reader.readAsDataURL(file);
-  });
+  for (const file of Array.from(input.files)) {
+    const dataUrl = await loadAndCorrectImage(file);
+    store.push({ name: file.name, dataUrl, type: 'image/jpeg', batch });
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.className = thumbClass;
+    grid.appendChild(img);
+  }
   input.value = '';
 
-  setTimeout(() => {
-    if (pendingPhotos1.length > 0 || pendingPhotos2.length > 0) {
-      document.getElementById('aiBtn').style.display = 'block';
-    }
-  }, 400);
+  if (pendingPhotos1.length > 0 || pendingPhotos2.length > 0) {
+    document.getElementById('aiBtn').style.display = 'block';
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -930,30 +997,44 @@ async function extractWithAI() {
     const proj = currentProject;
     const prompt = `You are an expert solar PV engineer analyzing IV care test photos for ACWA — ${proj === 'ar' ? 'Ar Rass 2' : 'KSH'} solar project.
 
-The photos are split into two labeled batches:
-- BATCH 1 photos = serial number label + nameplate + location tag + Test 1 (WITHOUT backside cover)
-- BATCH 2 photos = Test 2 (WITH backside covered)
-Trust the batch labels completely. Do NOT guess test order from timestamps or any other signal.
+BATCH RULES — CRITICAL:
+- BATCH 1 photos = serial number sticker + module nameplate label + location cable tag + Test 1 screen (WITHOUT backside cover)
+- BATCH 2 photos = Test 2 screen (WITH backside covered)
+Do NOT swap tests. Trust the batch labels completely.
 
-=== SERIAL NUMBER ===
-The barcode sticker is often photographed upside-down or rotated 180°.
-Read the characters regardless of orientation. Format is always alphanumeric like E2FXJ224E126100841758112.
-Try all rotations mentally and return the correct reading.
+=== SERIAL NUMBER STICKER ===
+This is a white barcode sticker on the module frame, usually photographed from underneath.
+The text is VERY OFTEN printed upside-down relative to the photo — the characters will appear mirrored/reversed.
+The serial number is always a long alphanumeric string starting with E2FX or E4FX, like: E2FXJ224E126100841758112
+When you see reversed text like "ZllBZl7480016ZE4ZX7FZE" — flip it mentally to get the real serial.
+Read every character carefully. Do not skip digits. Typical length is 20-24 characters.
 
-=== NAMEPLATE ===
-May be rotated or at an angle. Read all parameters: Pmax, Voc, Vmp, Isc, Imp.
+=== MODULE NAMEPLATE (spec label) ===
+This white label is printed on the backside of the module frame, often shot at an angle or rotated.
+The label uses these EXACT field names — map them precisely:
+- "Maximum Power (Pmax)" or just the wattage value → pmax (numeric, e.g. 620)
+- "Maximum Power Voltage (Vmp)" → vmp (numeric, e.g. 40.74)
+- "Maximum Power Current (Imp)" → imp (numeric, e.g. 15.22)
+- "Open Circuit Voltage (Voc)" → voc (numeric, e.g. 49.08) — ignore the ±5% tolerance text
+- "Short Circuit Current (Isc)" → isc (numeric, e.g. 16.08) — ignore the ±5% tolerance text
+- Model name like "JKM620N-66HL4M-BDV" → model field
+Extract only the numeric value, not the units or tolerance.
 
-${proj === 'ar' ? `=== AR RASS 2 — LOCATION TAG FORMAT ===
-The metal tag on the cable uses this pattern (any order/spacing):
-- MVPS or HVPS + number → MVPS field (e.g. MVPS88, HVPS28)
-- INV + number → Inverter (e.g. INV1, INV2)
-- DCB + number → DCB (e.g. DCB07)
-- S + number → String (e.g. S09, S14)` : `=== KSH — LOCATION TAG FORMAT ===
-The metal cable tag format is: G088 MQA18 GC008 WD002 (or similar)
-- G + number → MVPS (e.g. G088 = MVPS 88)
-- MQA + number → DCB (e.g. MQA18 = DCB 18)
-- GC + number → String (e.g. GC008 = String 8)
-- WD001 = positive cable, WD002 = negative cable (ignore this for the fields)`}
+${proj === 'ar' ? `=== AR RASS 2 — LOCATION TAG ===
+Small metal tag zip-tied to the cable near the module. Pattern:
+- MVPS or HVPS followed by number → mvps field (e.g. "MVPS88" or "HVPS28")
+- INV followed by number → inverter field (e.g. "INV1")
+- DCB followed by number → dcb field (e.g. "DCB07")
+- S followed by number → string field (e.g. "S09")` : `=== KSH — LOCATION TAG ===
+Small metal tag zip-tied to the cable. Format: G088 MQA18 GC008 WD002
+- G + number → mvps field (e.g. G088 → "MVPS88")
+- MQA + number → dcb field (e.g. MQA18 → "DCB18")
+- GC + number → string field (e.g. GC008 → "S8")
+- WD001/WD002 = cable polarity, ignore it`}
+
+=== SOLMETRIC PV ANALYZER SCREEN ===
+Digital screen showing a table with columns: Measured | Predicted | STC
+Extract every number you can see. The title bar shows the location code (e.g. "Inv1-MQA12-ST9").
 
 Return ONLY valid JSON, no markdown, no explanation:
 
@@ -1007,7 +1088,7 @@ Rules:
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-sonnet-4-5-20251022',
         max_tokens: 2000,
         messages: [{
           role: 'user',

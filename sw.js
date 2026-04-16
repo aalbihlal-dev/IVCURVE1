@@ -1,5 +1,6 @@
-// ── VERSION — change this every time you deploy to Netlify ──
-const VERSION = 'iv-v3';
+// ── AUTO-VERSIONED — do not edit this line manually ──
+// Version is injected by build.js at deploy time
+const VERSION = 'iv-1776345153235';
 const ASSETS  = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/avatar.png'];
 
 self.addEventListener('install', e => {
@@ -20,10 +21,8 @@ self.addEventListener('activate', e => {
   );
 
   // Tell all open tabs a new version is live
-  e.waitUntil(
-    self.clients.matchAll({ type: 'window' }).then(clients =>
-      clients.forEach(c => c.postMessage({ type: 'SW_UPDATED', version: VERSION }))
-    )
+  self.clients.matchAll({ type: 'window' }).then(clients =>
+    clients.forEach(c => c.postMessage({ type: 'SW_UPDATED', version: VERSION }))
   );
 });
 
